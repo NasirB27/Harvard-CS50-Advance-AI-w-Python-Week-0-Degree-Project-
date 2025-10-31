@@ -1,126 +1,171 @@
-# Degrees - Six Degrees of Separation
+import csv
+import sys
 
-**CS50 AI - Week 0, Project 1**
+from util import Node, StackFrontier, QueueFrontier
 
-> CS50 AI Week 0 Project 1: Implements BFS algorithm to find shortest degree of separation between actors using IMDb data
 
-## Overview
-Implementation of a breadth-first search (BFS) algorithm that determines the shortest path between any two actors by identifying shared movie connections. Based on the "Six Degrees of Kevin Bacon" concept.
+# Maps names to a set of corresponding person_ids
+names = {}
 
-## Problem Statement
-Given two actors, find the shortest sequence of movies that connects them, where each step consists of finding a movie that both actors starred in.
+# Maps person_ids to a dictionary of: name, birth, movies (a set of movie_ids)
+people = {}
 
-**Example:**
-- Jennifer Lawrence → Kevin Bacon (via X-Men: First Class) 
-- Kevin Bacon → Tom Hanks (via Apollo 13)
-- **Result:** 2 degrees of separation
+# Maps movie_ids to a dictionary of: title, year, stars (a set of person_ids)
+movies = {}
 
-## Implementation
-The solution uses:
-- **BFS algorithm** for optimal path finding (guarantees shortest path)
-- **Queue-based frontier** for level-order traversal
-- **Node tracking** with parent pointers for path reconstruction
-- **Explored set** for cycle prevention
 
-## Key Components
-```python
+def load_data(directory):
+    """
+    Load data from CSV files into memory.
+    """
+    # Load people
+    with open(f"{directory}/people.csv", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            people[row["id"]] = {
+                "name": row["name"],
+                "birth": row["birth"],
+                "movies": set()
+            }
+            if row["name"].lower() not in names:
+                names[row["name"].lower()] = {row["id"]}
+            else:
+                names[row["name"].lower()].add(row["id"])
+
+    # Load movies
+    with open(f"{directory}/movies.csv", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            movies[row["id"]] = {
+                "title": row["title"],
+                "year": row["year"],
+                "stars": set()
+            }
+
+    # Load stars
+    with open(f"{directory}/stars.csv", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                people[row["person_id"]]["movies"].add(row["movie_id"])
+                movies[row["movie_id"]]["stars"].add(row["person_id"])
+            except KeyError:
+                pass
+
+
+def main():
+    if len(sys.argv) > 2:
+        sys.exit("Usage: python degrees.py [directory]")
+    directory = sys.argv[1] if len(sys.argv) == 2 else "large"
+
+    # Load data from files into memory
+    print("Loading data...")
+    load_data(directory)
+    print("Data loaded.")
+
+    source = person_id_for_name(input("Name: "))
+    if source is None:
+        sys.exit("Person not found.")
+    target = person_id_for_name(input("Name: "))
+    if target is None:
+        sys.exit("Person not found.")
+
+    path = shortest_path(source, target)
+
+    if path is None:
+        print("Not connected.")
+    else:
+        degrees = len(path)
+        print(f"{degrees} degrees of separation.")
+        path = [(None, source)] + path
+        for i in range(degrees):
+            person1 = people[path[i][1]]["name"]
+            person2 = people[path[i + 1][1]]["name"]
+            movie = movies[path[i + 1][0]]["title"]
+            print(f"{i + 1}: {person1} and {person2} starred in {movie}")
+
+
 def shortest_path(source, target):
     """
     Returns the shortest list of (movie_id, person_id) pairs
     that connect the source to the target.
     If no possible path, returns None.
     """
-```
+    # Initialize frontier with starting position
+    start = Node(state=source, parent=None, action=None)
+    frontier = QueueFrontier()
+    frontier.add(start)
+    
+    # Initialize an empty explored set
+    explored = set()
+    
+    # Keep looping until solution found
+    while True:
+        # If frontier is empty, no path exists
+        if frontier.empty():
+            return None
+        
+        # Remove a node from the frontier
+        node = frontier.remove()
+        
+        # If this is the goal, we're done
+        if node.state == target:
+            # Reconstruct path by following parent pointers
+            path = []
+            while node.parent is not None:
+                path.append((node.action, node.state))
+                node = node.parent
+            path.reverse()
+            return path
+        
+        # Mark node as explored
+        explored.add(node.state)
+        
+        # Add neighbors to frontier
+        for movie_id, person_id in neighbors_for_person(node.state):
+            if person_id not in explored and not frontier.contains_state(person_id):
+                child = Node(state=person_id, parent=node, action=movie_id)
+                frontier.add(child)
 
-### Algorithm Features
-- **Time Complexity:** O(V + E) where V = actors, E = movie connections
-- **Space Complexity:** O(V) for frontier + explored set
-- **Optimality:** Guaranteed shortest path via BFS
 
-## Data Structure
-- `people.csv` - Actor IDs, names, birth years
-- `movies.csv` - Movie IDs, titles, release years  
-- `stars.csv` - Actor-Movie relationships
+def person_id_for_name(name):
+    """
+    Returns the IMDB id for a person's name,
+    resolving ambiguities as needed.
+    """
+    person_ids = list(names.get(name.lower(), set()))
+    if len(person_ids) == 0:
+        return None
+    elif len(person_ids) > 1:
+        print(f"Which '{name}'?")
+        for person_id in person_ids:
+            person = people[person_id]
+            name = person["name"]
+            birth = person["birth"]
+            print(f"ID: {person_id}, Name: {name}, Birth: {birth}")
+        try:
+            person_id = input("Intended Person ID: ")
+            if person_id in person_ids:
+                return person_id
+        except ValueError:
+            pass
+        return None
+    else:
+        return person_ids[0]
 
-## Usage
-```bash
-python degrees.py [directory]
 
-# Examples:
-python degrees.py small  # Test with small dataset
-python degrees.py large  # Full IMDb dataset
-```
+def neighbors_for_person(person_id):
+    """
+    Returns (movie_id, person_id) pairs for people
+    who starred with a given person.
+    """
+    movie_ids = people[person_id]["movies"]
+    neighbors = set()
+    for movie_id in movie_ids:
+        for person_id in movies[movie_id]["stars"]:
+            neighbors.add((movie_id, person_id))
+    return neighbors
 
-### Example Output
-```
-$ python degrees.py large
-Loading data...
-Data loaded.
-Name: Emma Watson
-Name: Jennifer Lawrence
-3 degrees of separation.
-1: Emma Watson and Brendan Gleeson starred in Harry Potter and the Order of the Phoenix
-2: Brendan Gleeson and Michael Fassbender starred in Trespass Against Us
-3: Michael Fassbender and Jennifer Lawrence starred in X-Men: First Class
-```
 
-## Project Structure
-```
-degrees/
-├── degrees.py          # Main implementation
-├── util.py            # Helper classes (Node, Frontiers)
-├── small/             # Test dataset
-│   ├── people.csv
-│   ├── movies.csv
-│   └── stars.csv
-├── large/             # Full dataset
-│   ├── people.csv
-│   ├── movies.csv
-│   └── stars.csv
-└── README.md
-```
-
-## Learning Outcomes
-- Graph traversal algorithms (BFS vs DFS)
-- State space search strategies
-- Path reconstruction using parent pointers
-- Optimization for shortest path problems
-- Understanding unweighted graph shortest paths
-
-## Algorithm Explanation
-
-### How BFS Guarantees Shortest Path
-1. Explores nodes layer-by-layer (level-order traversal)
-2. All 1-degree connections checked before 2-degree
-3. All 2-degree connections checked before 3-degree
-4. First path found is guaranteed to be shortest
-
-### Why Not DFS?
-- DFS explores depth-first, may find long paths first
-- Would need to explore ALL paths to guarantee optimality
-- No systematic guarantee of minimum path length
-
-## Testing
-```bash
-# Check correctness
-check50 ai50/projects/2024/x/degrees
-
-# Check code style
-style50 degrees.py
-```
-
-## Technologies
-- Python 3.12
-- CSV data processing
-- Graph algorithms
-- Search strategies
-
----
-
-**Course:** Harvard CS50's Introduction to Artificial Intelligence with Python  
-**Week:** 0 - Search  
-**Project:** 1 of 2 (Degrees)  
-**Completion Date:** October 31, 2025
-
-## Author
-Senior UX Engineer studying AI/ML fundamentals for design system architecture and automation applications.
+if __name__ == "__main__":
+    main()
